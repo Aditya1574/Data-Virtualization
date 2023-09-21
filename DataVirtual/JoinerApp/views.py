@@ -22,21 +22,23 @@ def get_filename(file_path):
     return file_name
 
 
-def JSONflatten_dict(d, parent_key='', sep='_'):
-    items = {}
+def JSONflatten_dict(d,items, parent_key='', sep='_'):
     for k, v in d.items():
         new_key = f"{parent_key}{sep}{k}" if parent_key else k
         if isinstance(v, dict):
-            items.update(JSONflatten_dict(v, new_key, sep=sep))
+            items.update(JSONflatten_dict(v,items, new_key, sep=sep))
         elif isinstance(v, list):
             if v and isinstance(v[0], dict):
                 for i, item in enumerate(v):
-                    items.update(JSONflatten_dict(item, f"{new_key}_{i}", sep=sep))
+                    items.update(JSONflatten_dict(item,items, f"{new_key}_{i}", sep=sep))
             else:
-                items[new_key] = v
+                if new_key not in items:
+                    items[new_key] = v
         else:
-            items[new_key] = v
+            if new_key not in items:
+                items[new_key] = v
     return items
+
 
 
 # fucntion for column names
@@ -59,16 +61,16 @@ for key, value in flattened_data.items():
 """
 
 
-def flatten_json(json_obj, flattened_data, separator='_', parent_key=''):
+def flatten_json(json_obj, flattened_data,conf_list,primary_key, separator='_', parent_key=''):
     for key, value in json_obj.items():
         new_key = f"{parent_key}{separator}{key}" if parent_key else key
         if isinstance(value, dict):
-            flattened_data.update(flatten_json(value, flattened_data, separator, new_key))
+            flattened_data.update(flatten_json(value, flattened_data,conf_list,primary_key, separator, new_key))
         elif isinstance(value, list):
             sub_dict = {}
             for i, item in enumerate(value):
                 if isinstance(item, dict):
-                    sub_dict.update(flatten_json(item, flattened_data, separator, f"{new_key}{separator}{i}"))
+                    sub_dict.update(flatten_json(item, flattened_data,conf_list,primary_key, separator, f"{new_key}{separator}{i}"))
                 else:
                     sub_key = f"{new_key}{separator}{key}"
                     if sub_key not in sub_dict:
@@ -79,8 +81,13 @@ def flatten_json(json_obj, flattened_data, separator='_', parent_key=''):
             if new_key not in flattened_data:
                 flattened_data[new_key] = []
             flattened_data[new_key].append(value)
+    limit = len(flattened_data[primary_key])
+    for col_name in conf_list:
+        if col_name not in flattened_data:
+            flattened_data[col_name] = []
+        if len(flattened_data[col_name]) < limit:
+            flattened_data[col_name].append("")
     return flattened_data
-
 
 """
 
@@ -108,11 +115,12 @@ def flatten_xml(element, flattened_keys, parent_key='', separator='.'):
         child_key = parent_key + separator + child_element.tag
         if len(child_element) > 0:
             if len(child_element) == 2:
-                child_key = child_key + f".{i}"
+                child_key = child_key + f".[{i}]"
             flatten_xml(child_element, flattened_keys, child_key, separator)
         else:
             child_key = child_key
-            flattened_keys.append(child_key)
+            if child_key not in flattened_keys:
+                flattened_keys.append(child_key)
     return flattened_keys
 
 
@@ -138,7 +146,7 @@ def get_xml_data(element, flattened_data, parent_key='', separator='.'):
         child_key = parent_key + separator + child_element.tag
         if len(child_element) > 0:
             if len(child_element) == 2:
-                child_key = child_key + f"[{i}]"
+                child_key = child_key + f".[{i}]"
             child_data = get_xml_data(child_element, flattened_data, child_key, separator)
             if child_key in flattened_data:
                 if not isinstance(flattened_data[child_key], list):
@@ -154,7 +162,9 @@ def get_xml_data(element, flattened_data, parent_key='', separator='.'):
                 flattened_data[child_key].append(child_element.text)
             else:
                 flattened_data[child_key] = [child_element.text]
+    # logic for making sure that the number of records are equal to the number of users
 
+    # print(flattened_data)
     return flattened_data
 
 
@@ -246,37 +256,24 @@ def GetXMLFlattenAttrNamesFromSource(xml_filepath):
     tree = ET.parse(xml_filepath)
     root = tree.getroot()
 
-    # Find the first child element of the root
-    first_child = list(root)[0]
-
-    # Get the name of the first child element
-    first_child_name = first_child.tag
-
-    first_record = root.find(first_child_name)  # Change 'record' to the actual tag name
-
-    # Create a new XML element tree containing only the root and the first record
-    new_root = ET.Element(root.tag)
-    new_root.append(first_record)
-
-    # Create a new XML tree with the new root
-    new_tree = ET.ElementTree(new_root)
-
-    # Serialize the new tree to a string
-    first_record_xml = ET.tostring(new_tree.getroot(), encoding='utf-8').decode('utf-8')
-
-    first_element = ET.fromstring(first_record_xml)
     flattened_data = []
-    return flatten_xml(first_element, flattened_data)
+    for element in root.iter(root.tag):
+        flattened_data = flatten_xml(element,flattened_data)
 
+    return [col_name[col_name[1:].find('.'):][1:] for col_name in flattened_data]
 
 def GetJSONFlattenAttrNamesFromSource(json_filepath):
     with open(json_filepath, 'r') as file:
         data = json.load(file)
 
     # Access the first object (usually the first item in a JSON array)
-    first_object = data[0]
+    # first_object = data[0]
 
-    return JSONflatten_dict(first_object).keys()
+    items = {}
+    for item in data:
+        items = JSONflatten_dict(item, items)
+
+    return list(items.keys())
 
 
 def ReverseDict(original_dict):
@@ -383,26 +380,26 @@ def GetRelationalDataAsDataFrame(databasename, table_name, column_names):
     return relational_df
 
 
-def GetJSONDataAsDataFrame(json_filepath, attr_names):
+def GetJSONDataAsDataFrame(json_filepath,attr_names,primary_key='id'):
     # reading json data and gettig it as a dictionary
     myjson_data = []
     try:
         with open(json_filepath, 'r') as json_file:
             myjson_data = json_file.read()
         # Now, json_data contains the entire JSON content as a string
-        # print(myjson_data)
         myjson_data = json.loads(myjson_data)
     except FileNotFoundError:
         print(f"JSON File not found: {json_filepath}")
 
+    conf_list = GetJSONFlattenAttrNamesFromSource(json_filepath)
     json_flattened_data = {}
     for json_data in myjson_data:
-        json_flattened_data = flatten_json(json_data, json_flattened_data)
+        json_flattened_data = flatten_json(json_data, json_flattened_data,conf_list,primary_key)
 
     # DF_JSON
     json_df = pd.DataFrame(json_flattened_data)
-    # print("JSON Dataframe \n", json_df)
 
+    print(json_df)
     return json_df[attr_names]
 
 
@@ -412,19 +409,31 @@ def GetXMLDataAsDataFrame(xml_filepath, attr_names):
         with open(xml_filepath, 'r') as xml_file:
             xml_data = xml_file.read()
             # Now, xml_data contains the entire XML document as a string
-            # print(xml_data)
     except FileNotFoundError:
         print(f"XML File not found: {xml_filepath}")
 
     xml_flattened_data = {}
     root = ET.fromstring(xml_data)
+    print(root)
 
     # Flatten  XML data
 
-    xml_flattened_data = get_xml_data(root, xml_flattened_data)
+    conf_list = GetXMLFlattenAttrNamesFromSource(xml_filepath)
 
-    # print(xml_flattened_data)
+    print(conf_list)
+    xml_flattened_data = {}
 
+    for elements in root.iter(root.tag):
+        number_of_record = 0
+        for element in elements:
+            number_of_record = number_of_record + 1
+            xml_flattened_data = get_xml_data(element, xml_flattened_data)
+            print("\n",xml_flattened_data)
+            for col in conf_list:
+                if col not in xml_flattened_data:
+                    xml_flattened_data[col] = []
+                if len(xml_flattened_data[col]) < number_of_record:
+                    xml_flattened_data[col].append("")
     # DF_XML
     xml_df = pd.DataFrame(xml_flattened_data)
 
@@ -555,7 +564,10 @@ def collected_data_processing(request):
                 # fetch  custom_name and datafields
                 cassandra_query = f"select custom_name,datafields from relationalmetadata where databasename='{db_name}'"
                 result = session.execute(cassandra_query)
+                print("all the entered  databases are present in the meta data repo : ",result)
                 for element in result:
+                    print("I am inside")
+                    print(element)
                     final_tables[element.custom_name + ":relational"] = element.datafields
 
             if excel_file:
@@ -586,11 +598,11 @@ def collected_data_processing(request):
                 result = session.execute(cassandra_query)[0]
                 xml_filepath = result.filepath
             print(final_tables)
-            print("in present route before : ", excel_filepath, xml_filepath, json_filepath)
+            # print("in present route before : ", excel_filepath, xml_filepath, json_filepath)
             excel_filepath=excel_filepath.replace("\\", "\\\\")
             json_filepath=json_filepath.replace("\\", "\\\\")
             xml_filepath=xml_filepath.replace("\\", "\\\\")
-            print("in present route  : ", excel_filepath,xml_filepath,json_filepath)
+            # print("in present route  : ", excel_filepath,xml_filepath,json_filepath)
             context = {
                 'table_data': final_tables,
                 'databasename': db_name,
@@ -783,7 +795,8 @@ def SeeSampleData(request):
             json_filepath = request.POST.get('json_filepath')
             column_names_show = GetJSONFlattenAttrNamesFromMeta(json_filepath)
             column_names = GetActualJSONFlattenAttrNamesFromMeta(json_filepath)
-            show_df = GetJSONDataAsDataFrame(json_filepath, column_names)
+            json_primary_key = getprimarykeyforjsonfile(json_filepath,element_name)
+            show_df = GetJSONDataAsDataFrame(json_filepath, column_names,json_primary_key)
         elif element_type == 'XML':
             xml_filepath = request.POST.get('xml_filepath')
             column_names = GetActualXMLFlattenAttrNamesFromMeta(xml_filepath)
@@ -800,7 +813,7 @@ def SeeSampleData(request):
                 row_elem.append(row[col])
             row_list.append(row_elem)
 
-        print(row_list)
+        # print(row_list)
         context = {
             'rows': row_list,
             'actual_columns': column_names,
@@ -1033,6 +1046,12 @@ def GenerateColumns(request):
         # return render(request,'multiple_ds_select_join_data.html', context)
 
 
+def getprimarykeyforjsonfile(json_filepath,custom_name):
+    json_filename = get_filename(json_filepath)
+    cassandra_query = f"select primary_key from jsonmetadata where filename='{json_filename}' and custom_name='{custom_name}';"
+    result = session.execute(cassandra_query)[0]
+    return result.primary_key
+
 def Datajoiner(request):
     if request.method == 'POST':
         databasename = request.POST.get('databasename')
@@ -1081,7 +1100,8 @@ def Datajoiner(request):
             final_df = GetExcelDataAsDataFrame(excel_filepath, element_name, values)
         elif element_type == 'JSON':
             values = JSONCustomToOrignal(json_filename, values)
-            final_df = GetJSONDataAsDataFrame(json_filepath, values)
+            primary_key = getprimarykeyforjsonfile(json_filepath,element_name)
+            final_df = GetJSONDataAsDataFrame(json_filepath, values,primary_key)
         elif element_type == 'XML':
             values = XMLCustomToOrignal(xml_filename, values)
             final_df = GetXMLDataAsDataFrame(xml_filepath, values)
@@ -1111,7 +1131,8 @@ def Datajoiner(request):
                 joining_df = GetExcelDataAsDataFrame(excel_filepath, element_name, values)
             elif element_type == 'JSON':
                 values = JSONCustomToOrignal(json_filename, values)
-                joining_df = GetJSONDataAsDataFrame(json_filepath, values)
+                json_primary_key = getprimarykeyforjsonfile(json_filepath,element_name)
+                joining_df = GetJSONDataAsDataFrame(json_filepath, values,json_primary_key)
             elif element_type == 'XML':
                 values = XMLCustomToOrignal(xml_filename, values)
                 joining_df = GetXMLDataAsDataFrame(xml_filepath, values)
@@ -1176,9 +1197,19 @@ def Datajoiner(request):
 
         # final_df[columns_required] :  all the data
         # columns_required : required_columns
+        dataframe_dict_list = final_df[columns_required].to_dict(orient='records')
+        print(columns_required)
+        # print(dataframe_dict_list)
+        row_list = []
+        for row in dataframe_dict_list:
+            row_elem = []
+            for col in columns_required:
+                row_elem.append(row[col])
+            row_list.append(row_elem)
 
+        # print(row_list)
         context = {
-            'dataframe': final_df[columns_required],
+            'rows': row_list,
             'actual_columns': columns_required,
             'columns': columns_required_show
         }
